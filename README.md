@@ -1,30 +1,54 @@
 # mcp-pubmed
 
-MCP server for [PubMed](https://pubmed.ncbi.nlm.nih.gov/) biomedical literature search via NCBI E-utilities. Free, no auth required.
+PubMed MCP — wraps the NCBI E-utilities API (biomedical literature, free, no auth)
+
+Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents to 250+ live data sources.
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| `search_pubmed` | Search articles by keyword, author, or MeSH term |
-| `get_summary` | Get metadata summaries for one or more PubMed IDs |
-| `get_abstract` | Get the full abstract text for a single article |
 
-## Quickstart (Pipeworx Gateway)
+## Quick Start
 
-```bash
-curl -X POST https://gateway.pipeworx.io/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {
-      "name": "pubmed_search_pubmed",
-      "arguments": { "query": "CRISPR cancer therapy" }
-    },
-    "id": 1
-  }'
+Add to your MCP client (Claude Desktop, Cursor, Windsurf, etc.):
+
+```json
+{
+  "mcpServers": {
+    "pubmed": {
+      "url": "https://gateway.pipeworx.io/pubmed/mcp"
+    }
+  }
+}
 ```
+
+Or connect to the full Pipeworx gateway for access to all 250+ data sources:
+
+```json
+{
+  "mcpServers": {
+    "pipeworx": {
+      "url": "https://gateway.pipeworx.io/mcp"
+    }
+  }
+}
+```
+
+## Using with ask_pipeworx
+
+Instead of calling tools directly, you can ask questions in plain English:
+
+```
+ask_pipeworx({ question: "your question about Pubmed data" })
+```
+
+The gateway picks the right tool and fills the arguments automatically.
+
+## More
+
+- [All tools and guides](https://github.com/pipeworx-io/examples)
+- [pipeworx.io](https://pipeworx.io)
 
 ## License
 
