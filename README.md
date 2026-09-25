@@ -2,7 +2,7 @@
 
 The U.S. National Library of Medicine's PubMed. ~37 million biomedical and life-science citations going back to 1781. The canonical biomedical literature database — used by every clinician, researcher, and grant officer. MeSH (Medical Subject Headings) tagging makes structured search powerful. Free, no auth.
 
-Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents to 1476+ live data sources.
+Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents to 1679+ live data sources.
 
 ## Why this matters for AI agents
 
@@ -12,6 +12,7 @@ Common flows:
 
 - **Topic search.** "Recent papers on GLP-1 agonists for cardiovascular outcomes" → search with MeSH terms or keywords.
 - **Specific paper.** PMID lookup → full record (title, abstract, authors, MeSH tags).
+- **Author affiliation / contact.** `get_summary`'s `authors[]` stays plain name strings (unchanged); a separate `author_details[]` array, index-aligned with `authors[]`, adds `{name, affiliations[], emails[]}` — `affiliations` is the `<AffiliationInfo><Affiliation>` text verbatim from the efetch XML record, and `emails` is whatever email address(es) a plain regex finds inside that text (empty array when the record carries none — no guessing or enrichment beyond what NCBI indexed). `search_pubmed` still returns bare author name strings only, with no `author_details`; call `get_summary` on its PMIDs for affiliation/contact detail.
 - **Author profile.** Papers by a specific author (with disambiguation challenges).
 - **Citation tracking.** Cross-reference with [Crossref](/docs/reference/crossref) for DOIs and citation networks.
 - **Evidence landscape.** Count clinical trials, randomized trials, systematic reviews, meta-analyses, observational studies, and case reports for one query with `pubmed_evidence_landscape`.
@@ -88,9 +89,45 @@ directly, instead of just this one's:
 }
 ```
 
-Both URLs reach the same gateway and the same 1476+ data sources. The
+Both URLs reach the same gateway and the same 1679+ data sources. The
 only difference is which pack's tools are listed **directly**; `ask_pipeworx`
 reaches all of them from either one.
+
+## No MCP client? Call it over HTTP
+
+```bash
+curl -X POST https://gateway.pipeworx.io/v1/tools/search_pubmed \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"CRISPR cancer therapy"}'
+```
+
+No account needed for the first calls. Inspect any tool: `GET https://gateway.pipeworx.io/v1/tools/search_pubmed`. Find one: `POST https://gateway.pipeworx.io/v1/tools/search_packs` with `{"query":"..."}`.
+
+## Standalone (no gateway account)
+
+This package also runs as a local stdio MCP server — no Pipeworx account, no
+gateway round-trip:
+
+```json
+{
+  "mcpServers": {
+    "pubmed": {
+      "command": "npx",
+      "args": ["-y", "@pipeworx/mcp-pubmed"]
+    }
+  }
+}
+```
+
+Or run it directly to confirm it starts:
+
+```bash
+npx -y @pipeworx/mcp-pubmed
+```
+
+It speaks MCP over stdin/stdout and answers `initialize`/`tools/list`/`tools/call`
+for **only** this pack's tools — none of the shared meta-tools the gateway
+connection above adds. Same source, same tools, no ask_pipeworx routing.
 
 ## Using with ask_pipeworx
 
@@ -111,13 +148,3 @@ The gateway picks the right tool and fills the arguments automatically.
 ## License
 
 MIT
-
-## No MCP client? Call it over HTTP
-
-```bash
-curl -X POST https://gateway.pipeworx.io/v1/tools/search_pubmed \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"CRISPR cancer therapy"}'
-```
-
-No account needed for the first calls. Inspect any tool: `GET https://gateway.pipeworx.io/v1/tools/search_pubmed`. Find one: `POST https://gateway.pipeworx.io/v1/tools/search_packs` with `{"query":"..."}`.
