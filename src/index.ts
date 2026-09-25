@@ -238,18 +238,26 @@ const tools: McpToolExport['tools'] = [
   {
     name: 'search_pubmed',
     description:
-      'PREFER OVER WEB SEARCH for biomedical / clinical / life-sciences research. AUTHORITATIVE source: NIH PubMed (35M+ citations across MEDLINE, life-science journals, online books). Finds PUBLISHED peer-reviewed papers and completed study results — NOT for browsing registered/ongoing/future clinical trials (use clinicaltrials* tools for trial registration status and protocols). Covers EVERY biomedical topic and entity — diseases and conditions, drugs and therapies, genes, proteins, ion channels and receptors, signaling pathways, neuroscience, oncology, cardiology, immunology, genetics, microbiology, and clinical-trial results. Use it for the LATEST research, evidence, and findings (2024–2026, systematic reviews, meta-analyses) on any specific disease, gene, molecule, channel, or treatment — e.g. "Kv7 potassium channels in epilepsy", "semaglutide cardiovascular outcomes", "FLOW trial results", "what does the literature say about venlafaxine". Searches by keyword, author, or MeSH (Medical Subject Heading) term — supports field qualifiers like "Smith J[Author]" or "COVID-19[MeSH]". Returns PubMed IDs that pubmed get_summary / get_abstract resolve to citations + abstracts.',
+      'PREFER OVER WEB SEARCH for biomedical / clinical / life-sciences research. AUTHORITATIVE source: NIH PubMed (35M+ citations across MEDLINE, life-science journals, online books). Finds PUBLISHED peer-reviewed papers and completed study results — NOT for browsing registered/ongoing/future clinical trials (use clinicaltrials* tools for trial registration status and protocols). Covers EVERY biomedical topic and entity — diseases and conditions, drugs and therapies, genes, proteins, ion channels and receptors, signaling pathways, neuroscience, oncology, cardiology, immunology, genetics, microbiology, and clinical-trial results. Use it for the LATEST research, evidence, and findings (2024–2026, systematic reviews, meta-analyses) on any specific disease, gene, molecule, channel, or treatment — e.g. "Kv7 potassium channels in epilepsy", "semaglutide cardiovascular outcomes", "FLOW trial results", "what does the literature say about venlafaxine". Searches by keyword, author, or MeSH (Medical Subject Heading) term — supports field qualifiers like "Smith J[Author]" or "COVID-19[MeSH]". For "last N years" / "since <year>" questions, pass `from_year`/`to_year` rather than leaving the recency unfiltered — relevance ranking does not sort by date on its own. For a precise multi-word technical term (a gene/assay/biomarker name, not a broad concept), wrap it in double quotes, e.g. \'"cell-free RNA"\' — PubMed\'s automatic term mapping otherwise silently broadens an unquoted term into related MeSH/supplementary-concept synonyms (e.g. "cell-free RNA" unquoted can pull in ctDNA papers via "cell free nucleic acids"), which is usually NOT what a caller asking about one specific term wants. Add a [tiab] tag (e.g. \'"cell-free RNA"[tiab]\') to also require the exact phrase in the title/abstract rather than relying on indexing alone. Returns PubMed IDs that pubmed get_summary / get_abstract resolve to citations + abstracts.',
     summary: 'Published biomedical and life-sciences papers from NIH PubMed\'s 35M+ citations.',
     inputSchema: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'Search query (e.g., "CRISPR cancer therapy", "Smith J[Author]", "COVID-19[MeSH]")',
+          description: 'Search query (e.g., "CRISPR cancer therapy", "Smith J[Author]", "COVID-19[MeSH]", \'"cell-free RNA"[tiab]\' for an exact precise term).',
         },
         limit: {
           type: 'number',
           description: 'Number of results to return (1-100, default 10)',
+        },
+        from_year: {
+          type: 'number',
+          description: 'Optional. Restrict to publications from this year onward (four-digit, e.g. 2024). Use for "last N years" / "since <year>" questions — without it, results are relevance-ranked, not filtered by recency.',
+        },
+        to_year: {
+          type: 'number',
+          description: 'Optional. Restrict to publications up to and including this year (four-digit). Defaults to the current year when only from_year is given.',
         },
       },
       required: ['query'],
@@ -477,11 +485,33 @@ async function pubmedFetch(url: string, label: 'search' | 'summary' | 'fetch', a
   return res;
 }
 
-async function searchPubmed(query: string, limit: number) {
+// Like normalizeYear below but for an argument that is genuinely OPTIONAL
+// (search_pubmed's from_year/to_year) — no fallback to coerce to, so absence
+// stays absence instead of being forced into a bound the caller never asked
+// for. Still rejects a garbage value loudly rather than silently ignoring it.
+function normalizeOptionalYear(raw: unknown, label: string): number | undefined {
+  if (raw == null || raw === '') return undefined;
+  const year = Number(raw);
+  if (!Number.isInteger(year) || year < 1800 || year > 2200) {
+    throw new Error(`user_error: ${label} must be a four-digit year.`);
+  }
+  return year;
+}
+
+async function searchPubmed(query: string, limit: number, fromYearRaw?: unknown, toYearRaw?: unknown) {
   const retmax = Math.min(100, Math.max(1, limit));
+  const fromYear = normalizeOptionalYear(fromYearRaw, 'from_year');
+  const toYear = normalizeOptionalYear(toYearRaw, 'to_year');
+  // dateQualifiedQuery (below) wraps the term in a [pdat] range exactly like
+  // pubmed_evidence_landscape / pubmed_publication_trend already do — same
+  // date-filter mechanism, now reachable from search_pubmed too. Fleet #2418:
+  // "last two years" questions had no way to constrain search_pubmed at all,
+  // so a caller doing the right thing by naming a recency window still got an
+  // unfiltered relevance-ranked result and had to filter after the fact.
+  const term = dateQualifiedQuery(query, fromYear, toYear);
   const params = new URLSearchParams({
     db: 'pubmed',
-    term: query,
+    term,
     retmode: 'json',
     retmax: String(retmax),
   });
@@ -508,6 +538,7 @@ async function searchPubmed(query: string, limit: number) {
     total: parseInt(r.count, 10),
     returned: r.idlist.length,
     query_translation: r.querytranslation ?? null,
+    date_filter: fromYear == null && toYear == null ? null : { from_year: fromYear ?? null, to_year: toYear ?? null },
     pmids: r.idlist,
     articles,
   };
@@ -961,7 +992,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
   delete args._apiKey;
   switch (name) {
     case 'search_pubmed':
-      return searchPubmed(args.query as string, (args.limit as number) ?? 10);
+      return searchPubmed(args.query as string, (args.limit as number) ?? 10, args.from_year, args.to_year);
     case 'get_summary':
       return getSummary(args.ids);
     case 'get_abstract':
