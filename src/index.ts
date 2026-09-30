@@ -62,6 +62,12 @@ type ESearchResult = {
     retstart: string;
     idlist: string[];
     querytranslation?: string;
+    // NCBI EXPLAINS ITS OWN ZERO RESULTS in the same esearch response and we
+    // were dropping all of it. A quoted phrase absent from the index, a term
+    // that exists nowhere, stopwords silently dropped from the conjunction --
+    // PubMed says which, and the caller was being told only "no_match".
+    warninglist?: { phrasesignored?: string[]; quotedphrasesnotfound?: string[]; outputmessages?: string[] };
+    errorlist?: { phrasesnotfound?: string[]; fieldsnotfound?: string[] };
   };
 };
 
@@ -534,10 +540,41 @@ async function searchPubmed(query: string, limit: number, fromYearRaw?: unknown,
     }
   }
 
+  const total = parseInt(r.count, 10);
+
+  // Turn PubMed's own explanation of a zero into something the caller can act
+  // on. Measured 2026-09-30: `"Orthopaedic Research Year Fellowships"[tiab]`
+  // returns 0 and reports quotedphrasesnotfound, and the SAME phrase unquoted
+  // returns 619 hits -- so "no results" was hiding "your quoting defeated the
+  // index". External callers hit this on real queries.
+  //
+  // ⚠️ EVERY BRANCH IS GATED ON total === 0, AND THAT GATE IS THE WHOLE FIX.
+  // NCBI raises these warnings on PRODUCTIVE queries too, verified live:
+  // `Kv7 potassium channels in epilepsy` returns 239 hits with
+  // phrasesignored:["in"], and `the role of the gut microbiota in the
+  // development of obesity` returns 2,058 with phrasesignored:["the","of","in"].
+  // Surfacing them on a success would tell callers their working query had
+  // failed -- which is the openfda/medicare trap this pack family has already
+  // paid for twice: a guard that fixes the failures and breaks the successes is
+  // worse than the bug. Ungated, this would have attached a not-found warning
+  // to three perfectly good result sets.
+  const notFound = [...(r.errorlist?.phrasesnotfound ?? []), ...(r.warninglist?.quotedphrasesnotfound ?? [])];
+  let hint: string | null = null;
+  if (total === 0 && notFound.length > 0) {
+    hint = `PubMed has no match for ${notFound.map((x) => JSON.stringify(x)).join(', ')}. Every other term is ANDed against it, so one absent phrase returns zero. Retry without that phrase, or unquoted so PubMed's automatic term mapping can expand it.`;
+  } else if (total === 0 && (fromYear != null || toYear != null)) {
+    hint = `No match within ${fromYear ?? 1800}-${toYear ?? new Date().getUTCFullYear()}. Retry without from_year/to_year to see whether the query matches outside that window.`;
+  } else if (total === 0) {
+    hint = 'No match. PubMed ANDs every term, so a long natural-language question usually returns zero — retry with just the 2-4 key biomedical terms. `query_translation` shows how PubMed parsed what you sent.';
+  }
+
   return {
-    total: parseInt(r.count, 10),
+    total,
+    found: total > 0,
     returned: r.idlist.length,
     query_translation: r.querytranslation ?? null,
+    ...(total === 0 && notFound.length > 0 ? { phrases_not_found: notFound } : {}),
+    ...(hint ? { hint } : {}),
     date_filter: fromYear == null && toYear == null ? null : { from_year: fromYear ?? null, to_year: toYear ?? null },
     pmids: r.idlist,
     articles,
