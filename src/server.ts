@@ -9,7 +9,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import pack from './index.js';
 
 const server = new Server(
-  { name: '@pipeworx/mcp-pubmed', version: '1.1.3' },
+  { name: '@pipeworx/mcp-pubmed', version: '1.1.4' },
   { capabilities: { tools: {} } },
 );
 

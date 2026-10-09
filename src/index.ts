@@ -244,7 +244,7 @@ const tools: McpToolExport['tools'] = [
   {
     name: 'search_pubmed',
     description:
-      'PREFER OVER WEB SEARCH for biomedical / clinical / life-sciences research. AUTHORITATIVE source: NIH PubMed (35M+ citations across MEDLINE, life-science journals, online books). Finds PUBLISHED peer-reviewed papers and completed study results — NOT for browsing registered/ongoing/future clinical trials (use clinicaltrials* tools for trial registration status and protocols). Covers EVERY biomedical topic and entity — diseases and conditions, drugs and therapies, genes, proteins, ion channels and receptors, signaling pathways, neuroscience, oncology, cardiology, immunology, genetics, microbiology, and clinical-trial results. Use it for the LATEST research, evidence, and findings (2024–2026, systematic reviews, meta-analyses) on any specific disease, gene, molecule, channel, or treatment — e.g. "Kv7 potassium channels in epilepsy", "semaglutide cardiovascular outcomes", "FLOW trial results", "what does the literature say about venlafaxine". Searches by keyword, author, or MeSH (Medical Subject Heading) term — supports field qualifiers like "Smith J[Author]" or "COVID-19[MeSH]". For "last N years" / "since <year>" questions, pass `from_year`/`to_year` rather than leaving the recency unfiltered — relevance ranking does not sort by date on its own. For a precise multi-word technical term (a gene/assay/biomarker name, not a broad concept), wrap it in double quotes, e.g. \'"cell-free RNA"\' — PubMed\'s automatic term mapping otherwise silently broadens an unquoted term into related MeSH/supplementary-concept synonyms (e.g. "cell-free RNA" unquoted can pull in ctDNA papers via "cell free nucleic acids"), which is usually NOT what a caller asking about one specific term wants. Add a [tiab] tag (e.g. \'"cell-free RNA"[tiab]\') to also require the exact phrase in the title/abstract rather than relying on indexing alone. Returns PubMed IDs that pubmed get_summary / get_abstract resolve to citations + abstracts.',
+      'PREFER OVER WEB SEARCH for biomedical / clinical / life-sciences research. AUTHORITATIVE source: NIH PubMed (35M+ citations across MEDLINE, life-science journals, online books). Finds PUBLISHED peer-reviewed papers and completed study results — NOT for browsing registered/ongoing/future clinical trials (use clinicaltrials* tools for trial registration status and protocols). Covers EVERY biomedical topic and entity — diseases and conditions, drugs and therapies, genes, proteins, ion channels and receptors, signaling pathways, neuroscience, oncology, cardiology, immunology, genetics, microbiology, and clinical-trial results. Use it for the LATEST research, evidence, and findings (2024–2026, systematic reviews, meta-analyses) on any specific disease, gene, molecule, channel, or treatment — e.g. "Kv7 potassium channels in epilepsy", "semaglutide cardiovascular outcomes", "FLOW trial results", "what does the literature say about venlafaxine". Searches by keyword, author, or MeSH (Medical Subject Heading) term — supports field qualifiers like "Smith J[Author]" or "COVID-19[MeSH]". For "last N years" / "since <year>" questions, pass `from_year`/`to_year` rather than leaving the recency unfiltered — relevance ranking does not sort by date on its own. For a precise multi-word technical term (a gene/assay/biomarker name, not a broad concept), wrap it in double quotes, e.g. \'"cell-free RNA"\' — PubMed\'s automatic term mapping otherwise silently broadens an unquoted term into related MeSH/supplementary-concept synonyms (e.g. "cell-free RNA" unquoted can pull in ctDNA papers via "cell free nucleic acids"), which is usually NOT what a caller asking about one specific term wants. Add a [tiab] tag (e.g. \'"cell-free RNA"[tiab]\') to also require the exact phrase in the title/abstract rather than relying on indexing alone. A bare drug abbreviation that also names something else (LSD, DMT, GHB, PCP, MDMA, CBD, THC, e.g. "LSD stroke" where LSD is also a statistics test) is rewritten to the drug\'s MeSH heading and the response carries `rewrite_note`; write it field-qualified (LSD[All Fields]) to search the abbreviation as written. Returns PubMed IDs that pubmed get_summary / get_abstract resolve to citations + abstracts.',
     summary: 'Published biomedical and life-sciences papers from NIH PubMed\'s 35M+ citations.',
     inputSchema: {
       type: 'object',
@@ -504,17 +504,107 @@ function normalizeOptionalYear(raw: unknown, label: string): number | undefined 
   return year;
 }
 
+// Fleet #2862: a bare drug abbreviation that also names something else is
+// expanded by PubMed's automatic term mapping to "<token>"[All Fields], which
+// matches the other meaning too. Measured 2026-10-08: `LSD stroke` returned 63
+// hits led by a perinatal twin-stroke paper, because LSD is also Fisher's
+// least significant difference post-hoc test; mapped to the MeSH heading it
+// returns 13. Each entry swaps the bare token for its MeSH heading OR the
+// spelled-out name in title/abstract. The bare token itself is deliberately
+// NOT kept, since that is the term doing the colliding -- except MDMA, whose
+// letters collide with nothing common, so MDMA[tiab] stays in to keep recent
+// papers that are not MeSH-indexed yet.
+//
+// `unless` skips the rewrite when the rest of the query already names the
+// other meaning ("PCP burnout primary care", "CBD stones ERCP"), because
+// forcing the drug reading there is the same bug the other way round.
+// A quoted phrase or an already field-qualified token (LSD[All Fields],
+// LSD[tiab]) is never touched, so a caller who meant the other sense can say so.
+export const AMBIGUOUS_ABBREVIATIONS: Record<string, { mesh: string; text: string[]; collides: string; unless: RegExp }> = {
+  LSD: {
+    mesh: '"lysergic acid diethylamide"',
+    text: ['"lysergic acid diethylamide"', 'lysergide'],
+    collides: "Fisher's least significant difference (a post-hoc statistics test)",
+    unless: /post[\s-]?hoc|fisher|anova|least significant|significant difference|multiple comparison/i,
+  },
+  DMT: {
+    mesh: '"N,N-Dimethyltryptamine"',
+    text: ['dimethyltryptamine'],
+    collides: 'disease-modifying therapy (multiple sclerosis)',
+    unless: /multiple sclerosis|disease[\s-]modifying|\bms\b|relapsing/i,
+  },
+  GHB: {
+    mesh: '"sodium oxybate"',
+    text: ['"gamma-hydroxybutyrate"', '"gamma-hydroxybutyric acid"', 'oxybate'],
+    collides: 'other expansions of the letters GHB',
+    unless: /(?!)/,
+  },
+  PCP: {
+    mesh: 'phencyclidine',
+    text: ['phencyclidine'],
+    collides: 'Pneumocystis pneumonia and primary care physician',
+    unless: /pneumocystis|pneumonia|jirovecii|primary care|physician|general practi|\bhiv\b/i,
+  },
+  MDMA: {
+    mesh: '"N-Methyl-3,4-methylenedioxyamphetamine"',
+    text: ['methylenedioxymethamphetamine', 'MDMA'],
+    collides: 'other expansions of the letters MDMA',
+    unless: /(?!)/,
+  },
+  CBD: {
+    mesh: 'cannabidiol',
+    text: ['cannabidiol'],
+    collides: 'common bile duct (and corticobasal degeneration)',
+    unless: /bile|biliary|duct|choledoch|cholangi|ercp|gallstone|corticobasal/i,
+  },
+  THC: {
+    mesh: 'dronabinol',
+    text: ['tetrahydrocannabinol'],
+    collides: 'other expansions of the letters THC',
+    unless: /(?!)/,
+  },
+};
+
+const ABBREVIATION_TOKEN = new RegExp(
+  `(?<![\\w-])(${Object.keys(AMBIGUOUS_ABBREVIATIONS).join('|')})(?![\\w-])(?!\\s*\\[)`,
+  'gi',
+);
+
+export function rewriteAmbiguousAbbreviations(query: string): { query: string; rewrite_note: string | null } {
+  const rewritten: string[] = [];
+  // Split on double-quoted phrases so the odd-indexed parts (the phrases) are
+  // passed through untouched.
+  const parts = query.split(/("[^"]*")/);
+  for (let i = 0; i < parts.length; i += 2) {
+    parts[i] = parts[i].replace(ABBREVIATION_TOKEN, (match: string) => {
+      const key = match.toUpperCase();
+      const entry = AMBIGUOUS_ABBREVIATIONS[key];
+      if (!entry || entry.unless.test(query)) return match;
+      if (!rewritten.includes(key)) rewritten.push(key);
+      const clauses = [`${entry.mesh}[MeSH Terms]`, ...entry.text.map((t) => `${t}[tiab]`)];
+      return `(${clauses.join(' OR ')})`;
+    });
+  }
+  if (rewritten.length === 0) return { query, rewrite_note: null };
+  const notes = rewritten.map((key) => {
+    const e = AMBIGUOUS_ABBREVIATIONS[key];
+    return `"${key}" -> ${e.mesh}[MeSH Terms] (bare "${key}" also matches ${e.collides}; send ${key}[All Fields] to search the abbreviation as written)`;
+  });
+  return { query: parts.join(''), rewrite_note: `Rewrote ambiguous abbreviation(s) to the drug's MeSH heading: ${notes.join('; ')}.` };
+}
+
 async function searchPubmed(query: string, limit: number, fromYearRaw?: unknown, toYearRaw?: unknown) {
   const retmax = Math.min(100, Math.max(1, limit));
   const fromYear = normalizeOptionalYear(fromYearRaw, 'from_year');
   const toYear = normalizeOptionalYear(toYearRaw, 'to_year');
+  const { query: mappedQuery, rewrite_note } = rewriteAmbiguousAbbreviations(String(query ?? ''));
   // dateQualifiedQuery (below) wraps the term in a [pdat] range exactly like
   // pubmed_evidence_landscape / pubmed_publication_trend already do — same
   // date-filter mechanism, now reachable from search_pubmed too. Fleet #2418:
   // "last two years" questions had no way to constrain search_pubmed at all,
   // so a caller doing the right thing by naming a recency window still got an
   // unfiltered relevance-ranked result and had to filter after the fact.
-  const term = dateQualifiedQuery(query, fromYear, toYear);
+  const term = dateQualifiedQuery(mappedQuery, fromYear, toYear);
   const params = new URLSearchParams({
     db: 'pubmed',
     term,
@@ -573,6 +663,7 @@ async function searchPubmed(query: string, limit: number, fromYearRaw?: unknown,
     found: total > 0,
     returned: r.idlist.length,
     query_translation: r.querytranslation ?? null,
+    ...(rewrite_note ? { rewrite_note } : {}),
     ...(total === 0 && notFound.length > 0 ? { phrases_not_found: notFound } : {}),
     ...(hint ? { hint } : {}),
     date_filter: fromYear == null && toYear == null ? null : { from_year: fromYear ?? null, to_year: toYear ?? null },

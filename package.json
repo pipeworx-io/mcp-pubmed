@@ -1,6 +1,6 @@
 {
   "name": "@pipeworx/mcp-pubmed",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "PubMed MCP — wraps the NCBI E-utilities API (biomedical literature, free, no auth)",
   "type": "module",
   "main": "src/index.ts",
@@ -26,7 +26,7 @@
     "@cloudflare/workers-types": "^4.20260405.1"
   },
   "pipeworx": {
-    "sourceHash": "v1-bb61271c08f2aaea7603e10bb0714bc34f3952166c41e293147775d3db9e4062",
-    "sourceCommit": "658bedc4e66c6eab7e17c569f81012a2ee312624"
+    "sourceHash": "v1-37bb5918230f5824069257420eb2ddaa8ec86a0995dc9d9e93157615d1e6d113",
+    "sourceCommit": "3d8d9f09e39ebb175a9e41fffd8601eeddcf10a4"
   }
 }
